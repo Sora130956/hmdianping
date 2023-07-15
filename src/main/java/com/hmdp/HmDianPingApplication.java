@@ -3,11 +3,14 @@ package com.hmdp;
 import cn.hutool.bloomfilter.BloomFilter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.config.SeckillCacheContextConfig;
 import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.impl.VoucherOrderServiceImpl;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.ShopBloomFilter;
+import com.sora.cache.CacheContext;
+import com.sora.exception.CacheRuntimeException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
@@ -55,9 +58,15 @@ public class HmDianPingApplication {
                 for(SeckillVoucher voucher : list){
                     //TIP 将秒杀券的库存量缓存到redis
                     Long voucherId = voucher.getVoucherId();
-                    try {
+                   /* try {
                         stringRedisTemplate.opsForValue().setIfAbsent(SECKILL_STOCK_KEY+voucherId,objectMapper.writeValueAsString(voucher.getStock()));
                     } catch (JsonProcessingException e) {
+                        throw new RuntimeException(e);
+                    }*/
+                    CacheContext<String, Long> seckillCacheContext = SeckillCacheContextConfig.getSeckillCacheContext();
+                    try {
+                        seckillCacheContext.put(SECKILL_STOCK_KEY+voucherId, Long.valueOf(voucher.getStock()));
+                    } catch (CacheRuntimeException e) {
                         throw new RuntimeException(e);
                     }
                     //TIP 将秒杀券的开始时间缓存到redis,其中过期时间为秒杀券的销售截止时间。
