@@ -3,7 +3,6 @@ package com.hmdp.service.impl;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hmdp.config.SeckillCacheContextConfig;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.entity.Voucher;
@@ -16,8 +15,6 @@ import com.hmdp.utils.OrderInfoDeliver;
 import com.hmdp.utils.RedisIDGenerater;
 import com.hmdp.utils.RedisUtil;
 import com.hmdp.utils.UserHolder;
-import com.sora.cache.CacheContext;
-import com.sora.exception.CacheRuntimeException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.curator.framework.CuratorFramework;
 import org.redisson.api.RBloomFilter;
@@ -74,7 +71,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Autowired
     OrderInfoDeliver orderInfoDeliver;
 
-    private static CacheContext<String,Long> seckillCacheContext = SeckillCacheContextConfig.getSeckillCacheContext();
+
+
 
     //TIP 引入内存级别的售完标志:秒杀券id->售完标志
     private static ConcurrentHashMap<Long,Boolean> soldOutMap = new ConcurrentHashMap<>();
@@ -133,7 +131,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     @Transactional
-    public Result secKill(Long voucherId) throws CacheRuntimeException {
+    public Result secKill(Long voucherId){
         //TIP 布隆过滤器实现一人一单 判断该用户是否曾经下过单
         boolean hasOrdered = userBloomFilter.contains(UserHolder.getUser().getId()+":"+voucherId);
         if(hasOrdered){
@@ -144,19 +142,19 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         //TIP 由于redis是单线程模型,所以所有线程会串行化地去预扣减库存,不会存在两个线程并发地读到同一个库存值的情况
         //TIP 也就是,每个线程跑到这一步,stock的值对每个线程来说是唯一的
         String voucherStockKey = SECKILL_STOCK_KEY + voucherId;
-        Long stock = seckillCacheContext.put(voucherStockKey,seckillCacheContext.get(voucherStockKey)-1);
+        Long stock = stringRedisTemplate.opsForValue().decrement(voucherStockKey);
         if(stock<0){
             //TIP 如果预扣减之后库存量小于0说明库存量不足,回滚redis的预扣减操作,返回提示信息
             //TIP 就是库存不够,没买到票！
             stringRedisTemplate.opsForValue().increment(voucherStockKey);
             createSoldOutSignal(voucherId);//TIP 设置售完标志
-//            try {
-//                //TIP 在业务方法中,将对售完标志的删除、创建操作通知到zookeeper,让tomcat集群中的其他机器能够同步售完标志
-//                zookeeperClient.create().forPath("/soldoutsign/"+voucherId);
-//                log.info("让zookeeper创建售完标志/soldoutsign/"+voucherId);
-//            } catch (Exception ex) {
-//                log.info("zookeeper已存在售完标志/soldoutsign/"+voucherId);
-//            }
+            try {
+                //TIP 在业务方法中,将对售完标志的删除、创建操作通知到zookeeper,让tomcat集群中的其他机器能够同步售完标志
+                zookeeperClient.create().forPath("/soldoutsign/"+voucherId);
+                log.info("让zookeeper创建售完标志/soldoutsign/"+voucherId);
+            } catch (Exception ex) {
+                log.info("zookeeper已存在售完标志/soldoutsign/"+voucherId);
+            }
             return Result.fail("库存不足");
         }
         Long orderId = null;
